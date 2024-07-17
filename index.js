@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const jwt = require('jsonwebtoken');
+const jwt = require("jsonwebtoken");
 const bcrypt = require('bcrypt');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
@@ -15,6 +15,21 @@ app.use(cors({
     ]
 }));
 app.use(express.json());
+
+// JWT middleware
+const verifyJWT = (req, res, next) => {
+    const token = req.headers['authorization'];
+    if (!token) {
+        return res.status(403).send('A token is required for authentication');
+    }
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = decoded;
+    } catch (err) {
+        return res.status(401).send('Invalid Token');
+    }
+    return next();
+};
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.euq4zn2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -33,20 +48,6 @@ async function run() {
         await client.connect();
 
         const userCollection = client.db("scicTask").collection("users");
-
-        // Middleware for JWT verification
-        const verifyToken = (req, res, next) => {
-            const token = req.headers.authorization?.split(' ')[1]; // Authorization: 'Bearer TOKEN'
-            if (!token) return res.status(401).send('Access Denied');
-
-            try {
-                const verified = jwt.verify(token, process.env.JWT_SECRET);
-                req.user = verified;
-                next();
-            } catch (err) {
-                res.status(400).send('Invalid Token');
-            }
-        };
 
         // User registration
         app.post('/register', async (req, res) => {
@@ -89,9 +90,33 @@ async function run() {
             res.send({ token, user });
         });
 
-        // Protected route example (requires JWT verification)
-        app.get('/protected', verifyToken, (req, res) => {
-            res.json(req.user);
+        // Get all users
+        app.get('/users', verifyJWT, async (req, res) => {
+            const users = await userCollection.find().toArray();
+            res.send(users);
+        });
+
+        // Search for a specific user by name
+        app.get('/users/search', verifyJWT, async (req, res) => {
+            const { name } = req.query;
+            const users = await userCollection.find({ name: { $regex: name, $options: "i" } }).toArray();
+            res.send(users);
+        });
+
+        // Activate or block a user
+        app.patch('/users/:id', verifyJWT, async (req, res) => {
+            const { id } = req.params;
+            const { status } = req.body; // 'active' or 'blocked'
+            const result = await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: { status } });
+            res.send(result);
+        });
+
+        // Update a user status
+        app.patch('/users/status/:id', verifyJWT, async (req, res) => {
+            const { id } = req.params;
+            const { status } = req.body; //
+            const result = await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: { status } });
+            res.send(result);
         });
 
         // Send a ping to confirm a successful connection
