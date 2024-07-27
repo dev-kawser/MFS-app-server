@@ -61,6 +61,7 @@ async function run() {
                 pin: hashedPin,
                 role,
                 status: 'pending',
+                action: 'active',
                 balance: role === 'user' ? 0 : 10000,
             };
 
@@ -85,6 +86,10 @@ async function run() {
                 return res.status(400).send('Invalid PIN');
             }
 
+            if (user.status !== 'approved') {
+                return res.status(403).send('User not approved');
+            }
+
             const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
             res.send({ token, user });
@@ -103,19 +108,23 @@ async function run() {
             res.send(users);
         });
 
-        // Activate or block a user
-        app.patch('/users/:id', verifyJWT, async (req, res) => {
+        // Update user action (activate or block)
+        app.patch('/users/action/:id', verifyJWT, async (req, res) => {
             const { id } = req.params;
-            const { status } = req.body; // 'active' or 'blocked'
-            const result = await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: { status } });
+            const { action } = req.body;
+            const result = await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: { action } });
             res.send(result);
         });
 
-        // Update a user status
+        // Update user status and add balance if approved
         app.patch('/users/status/:id', verifyJWT, async (req, res) => {
             const { id } = req.params;
-            const { status } = req.body; //
-            const result = await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: { status } });
+            const { status } = req.body;
+            const updateFields = { status };
+            if (status === 'approved') {
+                updateFields.balance = 40; // Add 40 Taka to balance
+            }
+            const result = await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: updateFields });
             res.send(result);
         });
 
@@ -136,3 +145,4 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
     console.log(`server is running on port: ${port}`);
 });
+
