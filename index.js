@@ -16,24 +16,8 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// JWT middleware
-const verifyJWT = (req, res, next) => {
-    const token = req.headers['authorization'];
-    if (!token) {
-        return res.status(403).send('A token is required for authentication');
-    }
-    try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = decoded;
-    } catch (err) {
-        return res.status(401).send('Invalid Token');
-    }
-    return next();
-};
-
+// MongoDB connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.euq4zn2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
-
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
     serverApi: {
         version: ServerApiVersion.v1,
@@ -41,6 +25,48 @@ const client = new MongoClient(uri, {
         deprecationErrors: true,
     }
 });
+
+// Middleware for JWT verification
+const verifyJWT = async (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+        return res.status(403).send('A token is required for authentication');
+    }
+
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+        return res.status(403).send('A token is required for authentication');
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (err) {
+        return res.status(401).send('Invalid Token');
+    }
+};
+
+// Middleware for PIN verification
+const verifyPin = async (req, res, next) => {
+    const { pin } = req.body;
+
+    // Ensure `userCollection` is defined inside this function
+    const userCollection = client.db("scicTask").collection("users");
+
+    const user = await userCollection.findOne({ _id: new ObjectId(req.user.id) });
+
+    if (!user) {
+        return res.status(400).send('User not found');
+    }
+
+    const isPinValid = await bcrypt.compare(pin, user.pin);
+    if (!isPinValid) {
+        return res.status(400).send('Invalid PIN');
+    }
+
+    next();
+};
 
 async function run() {
     try {
@@ -128,6 +154,55 @@ async function run() {
             res.send(result);
         });
 
+        // Send money
+        app.post('/send-money', verifyJWT, verifyPin, async (req, res) => {
+            const { recipient, amount } = req.body;
+            const { id } = req.user;
+
+            if (amount < 50) {
+                return res.status(400).send({ message: 'Minimum transaction amount is 50 Taka.' });
+            }
+
+            const userCollection = client.db("scicTask").collection("users");
+
+            const sender = await userCollection.findOne({ _id: new ObjectId(id) });
+            const recipientUser = await userCollection.findOne({ mobileNumber: recipient });
+
+            if (!recipientUser) {
+                return res.status(400).send({ message: 'Recipient not found.' });
+            }
+
+            let fee = 0;
+            if (amount > 100) {
+                fee = 5;
+            }
+
+            const totalAmount = parseFloat(amount) + fee;
+
+            if (sender.balance < totalAmount) {
+                return res.status(400).send({ message: 'Insufficient balance.' });
+            }
+
+            const session = client.startSession();
+            session.startTransaction();
+
+
+            await userCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $inc: { balance: -totalAmount } },
+                { session }
+            );
+            await userCollection.updateOne(
+                { _id: new ObjectId(recipientUser._id) },
+                { $inc: { balance: parseFloat(amount) } },
+                { session }
+            );
+
+            await session.commitTransaction();
+            res.send({ message: 'Transaction successful.' });
+
+        });
+
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ ping: 1 });
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
@@ -145,4 +220,3 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
     console.log(`server is running on port: ${port}`);
 });
-
