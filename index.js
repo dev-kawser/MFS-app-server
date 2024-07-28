@@ -231,6 +231,12 @@ async function run() {
             res.send(transactions);
         });
 
+
+        app.get('/allTransactions', verifyJWT, async (req, res) => {
+            const transactions = await transactionsCollection.find().toArray();
+            res.send(transactions);
+        });
+
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ ping: 1 });
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
