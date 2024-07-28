@@ -74,6 +74,7 @@ async function run() {
         await client.connect();
 
         const userCollection = client.db("scicTask").collection("users");
+        const transactionsCollection = client.db("scicTask").collection("transactions");
 
         // User registration
         app.post('/register', async (req, res) => {
@@ -154,7 +155,7 @@ async function run() {
             res.send(result);
         });
 
-        // Send money
+        // Send money api
         app.post('/send-money', verifyJWT, verifyPin, async (req, res) => {
             const { recipient, amount } = req.body;
             const { id } = req.user;
@@ -186,21 +187,48 @@ async function run() {
             const session = client.startSession();
             session.startTransaction();
 
+            try {
+                await userCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $inc: { balance: -totalAmount } },
+                    { session }
+                );
+                await userCollection.updateOne(
+                    { _id: new ObjectId(recipientUser._id) },
+                    { $inc: { balance: parseFloat(amount) } },
+                    { session }
+                );
 
-            await userCollection.updateOne(
-                { _id: new ObjectId(id) },
-                { $inc: { balance: -totalAmount } },
-                { session }
-            );
-            await userCollection.updateOne(
-                { _id: new ObjectId(recipientUser._id) },
-                { $inc: { balance: parseFloat(amount) } },
-                { session }
-            );
+                const transaction = {
+                    senderId: id,
+                    recipientId: recipientUser._id,
+                    amount: parseFloat(amount),
+                    fee,
+                    date: new Date()
+                };
 
-            await session.commitTransaction();
-            res.send({ message: 'Transaction successful.' });
+                await transactionsCollection.insertOne(transaction, { session });
 
+                await session.commitTransaction();
+                res.send({ message: 'Transaction successful.' });
+            } catch (error) {
+                await session.abortTransaction();
+                res.status(500).send({ message: 'Transaction failed.' });
+            } finally {
+                session.endSession();
+            }
+        });
+
+        // Transactions api
+        app.get('/transactions', verifyJWT, async (req, res) => {
+            const { id } = req.user;
+            const transactions = await transactionsCollection.find({
+                $or: [
+                    { senderId: id },
+                    { recipientId: id }
+                ]
+            }).sort({ date: -1 }).limit(10).toArray();
+            res.send(transactions);
         });
 
         // Send a ping to confirm a successful connection
