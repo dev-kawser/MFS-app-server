@@ -255,6 +255,17 @@ async function run() {
             res.send(transactions);
         });
 
+        app.get('/agent-transactions', verifyJWT, async (req, res) => {
+            const { id } = req.user;
+            const transactions = await transactionsCollection.find({
+                $or: [
+                    { senderId: id },
+                    { recipientId: id }
+                ]
+            }).sort({ date: -1 }).limit(20).toArray();
+            res.send(transactions);
+        });
+
 
         app.get('/allTransactions', verifyJWT, async (req, res) => {
             const transactions = await transactionsCollection.find().toArray();
