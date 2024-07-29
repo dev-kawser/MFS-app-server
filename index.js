@@ -147,13 +147,37 @@ async function run() {
         app.patch('/users/status/:id', verifyJWT, async (req, res) => {
             const { id } = req.params;
             const { status } = req.body;
-            const updateFields = { status };
-            if (status === 'approved') {
-                updateFields.balance = 40; // Add 40 Taka to balance
+
+            try {
+                // Find the user by ID
+                const user = await userCollection.findOne({ _id: new ObjectId(id) });
+
+                if (!user) {
+                    return res.status(404).send({ message: 'User not found' });
+                }
+
+                const updateFields = { status };
+
+                // Check if the status is approved
+                if (user.role === 'user' && status === 'approved') {
+                    updateFields.balance = (user.balance || 0) + 40; // Add 40 Taka to balance
+
+                    // If the user is an agent and has not received the 10,000 Taka bonus
+                    if (user.role === 'agent' && user.balance === 0) {
+                        updateFields.balance += 10000; // Add 10,000 Taka to balance
+                    }
+                }
+
+                // Update the user's status and balance
+                const result = await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: updateFields });
+
+                res.send(result);
+            } catch (error) {
+                console.error('Error updating user status:', error);
+                res.status(500).send({ message: 'Internal server error' });
             }
-            const result = await userCollection.updateOne({ _id: new ObjectId(id) }, { $set: updateFields });
-            res.send(result);
         });
+
 
         // Send money api
         app.post('/send-money', verifyJWT, verifyPin, async (req, res) => {
