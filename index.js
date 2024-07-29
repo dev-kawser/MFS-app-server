@@ -68,6 +68,20 @@ const verifyPin = async (req, res, next) => {
     next();
 };
 
+// Middleware for Agent Validation
+const verifyAgent = async (req, res, next) => {
+    const userId = req.user.id;
+    const userCollection = client.db("scicTask").collection("users");
+
+    const user = await userCollection.findOne({ _id: new ObjectId(userId) });
+
+    if (!user || user.role !== 'agent') {
+        return res.status(403).send('Access denied. Not an agent.');
+    }
+
+    next();
+};
+
 async function run() {
     try {
         // Connect the client to the server
@@ -271,6 +285,131 @@ async function run() {
             const transactions = await transactionsCollection.find().toArray();
             res.send(transactions);
         });
+
+        // Cash-In api
+        app.post('/cash-in', verifyJWT, verifyPin, async (req, res) => {
+            const { agentId, amount } = req.body;
+            const { id: userId } = req.user;
+
+            const session = client.startSession();
+            session.startTransaction();
+
+            try {
+
+                const agent = await userCollection.findOne({ _id: new ObjectId(agentId) });
+                if (!agent) {
+                    return res.status(400).send({ message: 'Agent not found.' });
+                }
+
+                if (agent.balance < amount) {
+                    return res.status(400).send({ message: 'Agent has insufficient balance.' });
+                }
+
+                await userCollection.updateOne(
+                    { _id: new ObjectId(userId) },
+                    { $inc: { balance: parseFloat(amount) } },
+                    { session }
+                );
+                await userCollection.updateOne(
+                    { _id: new ObjectId(agentId) },
+                    { $inc: { balance: -parseFloat(amount) } },
+                    { session }
+                );
+
+                const transaction = {
+                    userId,
+                    agentId,
+                    amount: parseFloat(amount),
+                    type: 'cash-in',
+                    date: new Date()
+                };
+
+                await transactionsCollection.insertOne(transaction, { session });
+
+                await session.commitTransaction();
+                res.send({ message: 'Cash-In successful.' });
+            } catch (error) {
+                await session.abortTransaction();
+                res.status(500).send({ message: 'Cash-In failed.', error });
+            } finally {
+                session.endSession();
+            }
+        });
+
+
+
+        // Cash-Out api
+        app.post('/cash-out', verifyJWT, verifyPin, async (req, res) => {
+            const { agentId, amount } = req.body;
+            const { id: userId } = req.user;
+
+            const session = client.startSession();
+            session.startTransaction();
+
+            try {
+                const userCollection = client.db("scicTask").collection("users");
+
+                const user = await userCollection.findOne({ _id: new ObjectId(userId) });
+                if (!user) {
+                    return res.status(400).send({ message: 'User not found.' });
+                }
+
+                const agent = await userCollection.findOne({ _id: new ObjectId(agentId) });
+                if (!agent) {
+                    return res.status(400).send({ message: 'Agent not found.' });
+                }
+
+                const fee = amount * 0.015;
+                const totalDeduction = parseFloat(amount) + fee;
+
+                if (user.balance < totalDeduction) {
+                    return res.status(400).send({ message: 'User has insufficient balance.' });
+                }
+
+                await userCollection.updateOne(
+                    { _id: new ObjectId(userId) },
+                    { $inc: { balance: -totalDeduction } },
+                    { session }
+                );
+                await userCollection.updateOne(
+                    { _id: new ObjectId(agentId) },
+                    { $inc: { balance: parseFloat(amount) } },
+                    { session }
+                );
+
+                const transaction = {
+                    userId,
+                    agentId,
+                    amount: parseFloat(amount),
+                    fee,
+                    type: 'cash-out',
+                    date: new Date()
+                };
+
+                const transactionsCollection = client.db("scicTask").collection("transactions");
+                await transactionsCollection.insertOne(transaction, { session });
+
+                await session.commitTransaction();
+                res.send({ message: 'Cash-Out successful.' });
+            } catch (error) {
+                await session.abortTransaction();
+                res.status(500).send({ message: 'Cash-Out failed.', error });
+            } finally {
+                session.endSession();
+            }
+        });
+
+        // Get all agents
+        app.get('/agents', verifyJWT, async (req, res) => {
+            const userCollection = client.db("scicTask").collection("users");
+            const agents = await userCollection.find({ role: 'agent' }).toArray();
+            res.send(agents);
+        });
+
+
+
+
+
 
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ ping: 1 });
