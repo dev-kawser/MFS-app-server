@@ -82,6 +82,7 @@ const verifyAgent = async (req, res, next) => {
     next();
 };
 
+
 async function run() {
     try {
         // Connect the client to the server
@@ -291,11 +292,7 @@ async function run() {
             const { agentId, amount } = req.body;
             const { id: userId } = req.user;
 
-            const session = client.startSession();
-            session.startTransaction();
-
             try {
-
                 const agent = await userCollection.findOne({ _id: new ObjectId(agentId) });
                 if (!agent) {
                     return res.status(400).send({ message: 'Agent not found.' });
@@ -305,37 +302,21 @@ async function run() {
                     return res.status(400).send({ message: 'Agent has insufficient balance.' });
                 }
 
-                await userCollection.updateOne(
-                    { _id: new ObjectId(userId) },
-                    { $inc: { balance: parseFloat(amount) } },
-                    { session }
-                );
-                await userCollection.updateOne(
-                    { _id: new ObjectId(agentId) },
-                    { $inc: { balance: -parseFloat(amount) } },
-                    { session }
-                );
-
-                const transaction = {
+                const pendingTransaction = {
                     userId,
                     agentId,
                     amount: parseFloat(amount),
                     type: 'cash-in',
+                    status: 'pending',
                     date: new Date()
                 };
 
-                await transactionsCollection.insertOne(transaction, { session });
-
-                await session.commitTransaction();
-                res.send({ message: 'Cash-In successful.' });
+                await transactionsCollection.insertOne(pendingTransaction);
+                res.send({ message: 'Cash-In request submitted and is pending approval.' });
             } catch (error) {
-                await session.abortTransaction();
                 res.status(500).send({ message: 'Cash-In failed.', error });
-            } finally {
-                session.endSession();
             }
         });
-
 
 
         // Cash-Out api
@@ -343,12 +324,7 @@ async function run() {
             const { agentId, amount } = req.body;
             const { id: userId } = req.user;
 
-            const session = client.startSession();
-            session.startTransaction();
-
             try {
-                const userCollection = client.db("scicTask").collection("users");
-
                 const user = await userCollection.findOne({ _id: new ObjectId(userId) });
                 if (!user) {
                     return res.status(400).send({ message: 'User not found.' });
@@ -366,38 +342,24 @@ async function run() {
                     return res.status(400).send({ message: 'User has insufficient balance.' });
                 }
 
-                await userCollection.updateOne(
-                    { _id: new ObjectId(userId) },
-                    { $inc: { balance: -totalDeduction } },
-                    { session }
-                );
-                await userCollection.updateOne(
-                    { _id: new ObjectId(agentId) },
-                    { $inc: { balance: parseFloat(amount) } },
-                    { session }
-                );
-
-                const transaction = {
+                const pendingTransaction = {
                     userId,
                     agentId,
                     amount: parseFloat(amount),
                     fee,
                     type: 'cash-out',
+                    status: 'pending',
                     date: new Date()
                 };
 
-                const transactionsCollection = client.db("scicTask").collection("transactions");
-                await transactionsCollection.insertOne(transaction, { session });
-
-                await session.commitTransaction();
-                res.send({ message: 'Cash-Out successful.' });
+                await transactionsCollection.insertOne(pendingTransaction);
+                res.send({ message: 'Cash-Out request submitted and is pending approval.' });
             } catch (error) {
-                await session.abortTransaction();
                 res.status(500).send({ message: 'Cash-Out failed.', error });
-            } finally {
-                session.endSession();
             }
         });
+
+
 
         // Get all agents
         app.get('/agents', verifyJWT, async (req, res) => {
@@ -405,6 +367,112 @@ async function run() {
             const agents = await userCollection.find({ role: 'agent' }).toArray();
             res.send(agents);
         });
+
+        // Get all transactions for an agent
+        app.get('/agent-transactions', verifyJWT, async (req, res) => {
+            const { id } = req.user;
+            const transactions = await transactionsCollection.find({
+                $or: [
+                    { userId: id },
+                    { agentId: id }
+                ]
+            }).sort({ date: -1 }).limit(20).toArray();
+            res.send(transactions);
+        });
+
+        // Approve or Reject a transaction
+        app.patch('/approve-transaction/:id', verifyJWT, verifyAgent, async (req, res) => {
+
+
+            const { id } = req.params;
+            const { approve } = req.body;
+
+
+            if (typeof approve !== 'boolean') {
+                return res.status(400).send({ message: 'Invalid approve value.' });
+            }
+
+            const session = client.startSession();
+            session.startTransaction();
+
+            try {
+                const transaction = await transactionsCollection.findOne({ _id: new ObjectId(id) });
+
+
+                if (!transaction || transaction.status !== 'pending') {
+                    return res.status(400).send({ message: 'Transaction not found or already processed.' });
+                }
+
+                if (approve) {
+                    if (transaction.type === 'cash-in') {
+                        await userCollection.updateOne(
+                            { _id: new ObjectId(transaction.userId) },
+                            { $inc: { balance: transaction.amount } },
+                            { session }
+                        );
+                        await userCollection.updateOne(
+                            { _id: new ObjectId(transaction.agentId) },
+                            { $inc: { balance: -transaction.amount } },
+                            { session }
+                        );
+                    } else if (transaction.type === 'cash-out') {
+                        const fee = transaction.fee;
+                        const totalDeduction = transaction.amount + fee;
+
+                        await userCollection.updateOne(
+                            { _id: new ObjectId(transaction.userId) },
+                            { $inc: { balance: -totalDeduction } },
+                            { session }
+                        );
+                        await userCollection.updateOne(
+                            { _id: new ObjectId(transaction.agentId) },
+                            { $inc: { balance: transaction.amount } },
+                            { session }
+                        );
+                    }
+                }
+
+                await transactionsCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { status: approve ? 'approved' : 'rejected' } },
+                    { session }
+                );
+
+                await session.commitTransaction();
+                res.send({ message: `Transaction ${approve ? 'approved' : 'rejected'} successfully.` });
+            } catch (error) {
+                await session.abortTransaction();
+                res.status(500).send({ message: 'Transaction processing failed.', error });
+            } finally {
+                session.endSession();
+            }
+        });
+
+
+
+
+
+
+
+
+
+        // Get pending transactions for an agent
+        app.get('/pending-transactions', verifyJWT, verifyAgent, async (req, res) => {
+            const { id: agentId } = req.user;
+            try {
+                console.log('Fetching pending transactions for agent:', agentId);
+                const transactions = await transactionsCollection.find({
+                    agentId: agentId,
+                    status: 'pending' // Ensure that only pending transactions are fetched
+                }).sort({ date: -1 }).toArray();
+                console.log('Fetched transactions:', transactions); // Log the fetched transactions
+                res.send(transactions);
+            } catch (error) {
+                console.error('Error fetching pending transactions:', error);
+                res.status(500).send({ message: 'Failed to fetch pending transactions.' });
+            }
+        });
+
 
 
 
