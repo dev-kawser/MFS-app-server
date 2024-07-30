@@ -9,12 +9,18 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors({
+const corsOptions = {
     origin: [
         'http://localhost:5173',
-    ]
-}));
+        'http://taka-express.netlify.app'
+    ],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
+
 
 // MongoDB connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.euq4zn2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -464,7 +470,7 @@ async function run() {
         app.get('/pending-transactions', verifyJWT, verifyAgent, async (req, res) => {
             const { id: agentId } = req.user;
             try {
-                
+
                 const transactions = await transactionsCollection.find({
                     agentId: agentId,
                     status: 'pending' // Ensure that only pending transactions are fetched
