@@ -270,12 +270,11 @@ async function run() {
             res.send(transactions);
         });
 
-        app.get('/agent-transactions', verifyJWT, async (req, res) => {
-            const { id } = req.user;
+        app.get('/agent-transactions', verifyJWT, verifyAgent, async (req, res) => {
+            const { id: agentId } = req.user;
             const transactions = await transactionsCollection.find({
                 $or: [
-                    { senderId: id },
-                    { recipientId: id }
+                    { agentId: agentId },
                 ]
             }).sort({ date: -1 }).limit(20).toArray();
             res.send(transactions);
@@ -368,17 +367,22 @@ async function run() {
             res.send(agents);
         });
 
-        // Get all transactions for an agent
         app.get('/agent-transactions', verifyJWT, async (req, res) => {
             const { id } = req.user;
-            const transactions = await transactionsCollection.find({
-                $or: [
-                    { userId: id },
-                    { agentId: id }
-                ]
-            }).sort({ date: -1 }).limit(20).toArray();
-            res.send(transactions);
+            try {
+                const transactions = await transactionsCollection.find({
+                    $or: [
+                        { userId: id },
+                        { agentId: id }
+                    ]
+                }).sort({ date: -1 }).limit(20).toArray();
+                res.send(transactions);
+            } catch (error) {
+                console.error('Error fetching agent transactions:', error);
+                res.status(500).send({ message: 'Failed to fetch transactions.' });
+            }
         });
+
 
         // Approve or Reject a transaction
         app.patch('/approve-transaction/:id', verifyJWT, verifyAgent, async (req, res) => {
@@ -460,12 +464,11 @@ async function run() {
         app.get('/pending-transactions', verifyJWT, verifyAgent, async (req, res) => {
             const { id: agentId } = req.user;
             try {
-                console.log('Fetching pending transactions for agent:', agentId);
+                
                 const transactions = await transactionsCollection.find({
                     agentId: agentId,
                     status: 'pending' // Ensure that only pending transactions are fetched
-                }).sort({ date: -1 }).toArray();
-                console.log('Fetched transactions:', transactions); // Log the fetched transactions
+                }).sort({ date: -1 }).toArray(); // Log the fetched transactions
                 res.send(transactions);
             } catch (error) {
                 console.error('Error fetching pending transactions:', error);
