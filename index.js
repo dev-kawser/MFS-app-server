@@ -9,16 +9,12 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // Middleware
-const corsOptions = {
+app.use(cors({
     origin: [
         'http://localhost:5173',
-        'http://taka-express.netlify.app'
+        'https://taka-express.netlify.app'
     ],
-    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-};
-
-app.use(cors(corsOptions));
+}));
 app.use(express.json());
 
 
